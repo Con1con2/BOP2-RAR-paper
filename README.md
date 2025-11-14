@@ -1,2 +1,10 @@
 # BOP2-RAR-paper
 Code for the Bayesian Optimal Phase II design with optimised stopping boundaries and response-adaptive randomisation paper
+
+MyPackageV2 is needed for the Rcpp code to run in the parallelise code. Toggling rcpp = FALSE in most functions will disable this requirement. Each script will attempt to load the library at the start.
+
+Figures 1,2,3,6 and Table 1, 2, 5 are generated from Flexible IA placement
+
+Figure 4 and Table Table 4 are generated from Investigating IA freq multi-arm
+
+Figure 5 is generated from BOP2 reproducible
