@@ -1,5 +1,5 @@
 ## IA Freq multi-arm (and RAR comparisons)
-# updated
+# updated 
 
 library(Rcpp) # Load package 'Rcpp'
 
@@ -11,6 +11,7 @@ library(microbenchmark)
 
 library(doParallel)  # Parallelisation
 library(foreach)  # Parallelisation
+library(doRNG) #  Reproducible in parallel
 
 library(roxygen2)
 
@@ -1471,7 +1472,7 @@ allo_prob_plot = function(control = FALSE){
   
 }
 
-One_ESS_plot_multi = function(treats_eff, treats_tox, n = 180, IAn = c(n), lambda = 0.83, gamma = 0.71, RAR = FALSE, trippa = FALSE, n_sim = 10000, control = FALSE, max_pa = FALSE, PairedSeed = FALSE, FWER = FALSE){
+One_ESS_plot_multi = function(treats_eff, treats_tox, n = 180, IAn = c(n), lambda = 0.83, gamma = 0.71, RAR = FALSE, trippa = FALSE, n_sim = 10000, control = FALSE, max_pa = FALSE, PairedSeed = FALSE, FWER = FALSE, optim = FALSE){
   # Will plot ESS for multi-arm cases.
   # Will just see how the ESS changes for each arm as you change the IA placement
   
@@ -1486,6 +1487,15 @@ One_ESS_plot_multi = function(treats_eff, treats_tox, n = 180, IAn = c(n), lambd
   
   # To get the IAs
   for (i in 1:iter ){
+    
+    if (optim){
+      print(i)
+      temp_para = grid_search_flex_multi(control_eff = rep(treats_eff[1],length(treats_eff)), control_tox =  rep(treats_tox[1],length(treats_eff)), treats_eff = treats_eff, treats_tox = treats_tox, n = 180, IAn = c(n), control = control, RAR = RAR, trippa = trippa, n_sim = n_sim, target_FWER = 0.1, max_pa = max_pa )
+      lambda = temp_para[1]
+      gamma = temp_para[2]
+    }
+    
+    
     temp_data = OC_gen(treats_eff, treats_tox, n, IAn = c(remain + i*num_arms, n), lambda, gamma, RAR, trippa, n_sim, control, max_pa, PairedSeed = PairedSeed)
 
     IA_list[[i]] = temp_data[[2]]
@@ -1589,12 +1599,13 @@ One_ESS_plot_multi = function(treats_eff, treats_tox, n = 180, IAn = c(n), lambd
 
 ## Figure 7
 
-Figure_7 = FALSE
+Figure_7 = TRUE
 
 if (Figure_7){
   set.seed(2025)
+  registerDoRNG(2025)
   
-  One_ESS_plot_multi(c(0.45,0.45,0.6),c(0.3,0.3,0.2), PairedSeed = 2025)
+  One_ESS_plot_multi(c(0.45,0.45,0.6),c(0.3,0.3,0.2), PairedSeed = 2025, optim = TRUE)
   
 }
 
@@ -1680,7 +1691,7 @@ if (Table_6){
 
 
 ## Figure 12 and 13 aren't stochastic, just by calling allo_prob_plot
-Figure_12_13 = TRUE
+Figure_12_13 = FALSE
 if(Figure_12_13){
   
   

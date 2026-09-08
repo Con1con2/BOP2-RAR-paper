@@ -1,5 +1,5 @@
 ## Flexible IA placement code
-# updated
+# updated #
 
 library(Rcpp) # Load package 'Rcpp'
 
@@ -11,6 +11,7 @@ library(microbenchmark)
 
 library(doParallel)  # Parallelisation
 library(foreach)  # Parallelisation
+library(doRNG) #  Reproducible in parallel
 
 library(roxygen2)
 
@@ -110,12 +111,26 @@ Beta_comp_exact_4_arm = function(A1,B1, A2, B2, A3, B3, A4, B4){
 
 }
 
-Threshold_prob = function(lamda, gamma, n_total, n_current){
+Threshold_prob = function(lamda, gamma, n_total, n_current, symmetric = FALSE){
   ## Function responsible for the threshold probabilities for early stopping
   # gamma and lamda are the same variables in the BOP2 paper
   # n_total is the total sample size (of the arm)
   # n_current is the current sample size (of the arm)
+  
+  if (lamda > 1){
+    if (n_total == n_current){
+      return(c(1,1))
+    }
+    return(c(0,1))
+  }
 
+  if (symmetric){
+
+    if (n_total == n_current){
+      return(c(1,1))
+    }
+    return(c(0.1,0.9))
+  }
 
   Futility = lamda * (n_current/n_total)^gamma
   Super = 2 * pnorm ( (qnorm ( (1 + lamda)/2))/sqrt(n_current/n_total)) - 1
@@ -482,7 +497,7 @@ Sim_trial_V2 = function(control, treat, n, IAn = c(n), prior_a = 1, prior_b = 1,
 
 }
 
-Sim_trial_V2_RAR = function(control, treat, n, IAn = c(n), prior_a = 1, prior_b = 1, gamma = 0.92, lambda = 0.9, beta_cpp = TRUE, full_PBD = TRUE, PairedSeed = FALSE){
+Sim_trial_V2_RAR = function(control, treat, n, IAn = c(n), prior_a = 1, prior_b = 1, gamma = 0.92, lambda = 0.9, beta_cpp = TRUE, full_PBD = TRUE, PairedSeed = FALSE, symmetric  = FALSE){
   ## This function aims to update Sim_trial to give more flexibility with IA placement
   # The main difference is that IAn will be able to take a vector, and that vector will represent the
   # IA placements
@@ -565,7 +580,7 @@ Sim_trial_V2_RAR = function(control, treat, n, IAn = c(n), prior_a = 1, prior_b 
 
 
     # Threshold probabilities
-    Probs = Threshold_prob(lambda,gamma,n,IAn[i])
+    Probs = Threshold_prob(lambda,gamma,n,IAn[i], symmetric = symmetric)
 
     # browser() # for testing
 
@@ -612,13 +627,14 @@ Sim_trial_V2_RAR = function(control, treat, n, IAn = c(n), prior_a = 1, prior_b 
 
     allo_prob = allo_prob_tune/(allo_prob_tune + allo_prob_comp)
 
+    #browser()
 
   }
 
 
 }
 
-plots_IA_results = function(IAn, n_sim = 10000, RAR = TRUE, control = 0.2, treat = 0.4, n = 80, gamma = 0.97, lambda = 0.91, beta_cpp = TRUE, full_PBD = TRUE, return_var = FALSE, return_prop = FALSE, PairedSeed = FALSE, return_95 = FALSE){
+plots_IA_results = function(IAn, n_sim = 10000, RAR = TRUE, control = 0.2, treat = 0.4, n = 80, gamma = 0.97, lambda = 0.91, beta_cpp = TRUE, full_PBD = TRUE, return_var = FALSE, return_prop = FALSE, PairedSeed = FALSE, return_95 = FALSE, symmetric = FALSE){
 
   ESS = 0 # Will add up sample sizes
   Power = 0 # Will add up power
@@ -638,7 +654,7 @@ plots_IA_results = function(IAn, n_sim = 10000, RAR = TRUE, control = 0.2, treat
 
   for (i in 1:n_sim){
     if (RAR){
-      temp_results = Sim_trial_V2_RAR(control, treat, n, IAn, gamma = gamma, lambda = lambda, beta_cpp = beta_cpp, full_PBD = full_PBD, PairedSeed = PairedSeed)
+      temp_results = Sim_trial_V2_RAR(control, treat, n, IAn, gamma = gamma, lambda = lambda, beta_cpp = beta_cpp, full_PBD = full_PBD, PairedSeed = PairedSeed, symmetric = symmetric)
     }
     else{
       temp_results = Sim_trial_V2(control, treat, n, IAn, gamma = gamma, lambda = lambda, beta_cpp = beta_cpp, PairedSeed = PairedSeed)
@@ -716,19 +732,25 @@ plots_IA_results = function(IAn, n_sim = 10000, RAR = TRUE, control = 0.2, treat
   
   }
   if (return_prop){
-    return(c("Mean prop" = mean(prop_vec),"Var prop" = var(prop_vec)))
+    
+    sort_prop = sort(prop_vec)
+    LQ_prop = sort_prop[round(0.025*n_sim)] # recording quantiles
+    UQ_prop = sort_prop[round(0.975*n_sim)]
+    return(c("Mean prop" = mean(prop_vec),"Var prop" = var(prop_vec), "LQ prop" = LQ_prop, "UQ prop" = UQ_prop))
   }
   
 
   return(c(Power, ESS))
 }
 
-prop_plot = function(PairedSeed = FALSE){
+prop_plot = function(PairedSeed = FALSE, optim = FALSE){
   ## Does the sd plot of IA that is needed in the paper
   
   IA_index = (1:39)*2
   
   prop = numeric(length(IA_index))
+  LQ_prop = numeric(length(IA_index))
+  UQ_prop = numeric(length(IA_index))
   
   sd_prop = numeric(length(IA_index))
   
@@ -736,9 +758,20 @@ prop_plot = function(PairedSeed = FALSE){
 
   
   for (i in 1:length(IA_index)){
-    temp_result = plots_IA_results(c(IA_index[i],80), return_prop = TRUE, RAR = TRUE, PairedSeed = PairedSeed)
+    
+    if (optim){
+      print(i)
+      temp_para = flex_grid_search(IAn = c(IA_index[i],80), RAR = TRUE)
+      lambda = temp_para[1]
+      gamma = temp_para[2]
+    }
+    
+    
+    temp_result = plots_IA_results(c(IA_index[i],80), return_prop = TRUE, RAR = TRUE, PairedSeed = PairedSeed, lambda = lambda, gamma = gamma)
     prop[i] = temp_result[1]
     sd_prop[i] = sqrt(temp_result[2])
+    LQ_prop[i] = temp_result[3]
+    UQ_prop[i] = temp_result[4]
   }
   
   plot_data = data.frame(IA_index = (1:39)*2, Proportion = prop, Sd = sd_prop)
@@ -755,7 +788,7 @@ prop_plot = function(PairedSeed = FALSE){
     scale_y_continuous(breaks = seq(0.45, 0.65, by = 0.05))
   
   ggplot_ess = ggplot(plot_data, aes(x=IA_index, y=Proportion)) +
-    geom_ribbon(aes(ymin=Proportion-1.96*Sd, ymax=Proportion+1.96*Sd, alpha = 0.5), fill = "grey70") +
+    geom_ribbon(aes(ymin=LQ_prop, ymax=UQ_prop, alpha = 0.5), fill = "grey70") +
     geom_line(aes(y = Proportion)) +
     labs( title = "Proportion allocated to best treatment against IA placement.", x = "IA placement") +
     coord_cartesian(ylim = c(0.45,0.65)) +
@@ -768,7 +801,92 @@ prop_plot = function(PairedSeed = FALSE){
   
 }
 
-one_IA_ESS_plot = function(RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0.4, PairedSeed = FALSE, n_sim = 100000){
+prop_plot_across_null = function(PairedSeed = FALSE, lambda = 0.9, gamma = 0.86, symmetric = FALSE){
+  
+  control_vec_1 = rep(0.1,9)
+  control_vec_2 = rep(0.5,9)
+  
+  prop_1 = numeric(9)
+  LQ_prop_1 = numeric(9)
+  UQ_prop_1 = numeric(9)
+  
+  prop_2 = numeric(9)
+  LQ_prop_2 = numeric(9)
+  UQ_prop_2 = numeric(9)
+  
+  
+  treat_vec = (1:9)/10
+  
+  for (i in 1:9){
+    
+    temp_result = plots_IA_results(c(20,40,60,80), return_prop = TRUE, RAR = TRUE, PairedSeed = PairedSeed, lambda = lambda, gamma = gamma, control = control_vec_1[i], treat = treat_vec[i], symmetric = symmetric)
+    prop_1[i] = temp_result[1]
+    LQ_prop_1[i] = temp_result[3]
+    UQ_prop_1[i] = temp_result[4]
+    
+    temp_result = plots_IA_results(c(20,40,60,80), return_prop = TRUE, RAR = TRUE, PairedSeed = PairedSeed, lambda = lambda, gamma = gamma, control = control_vec_2[i], treat = treat_vec[i], symmetric = symmetric)
+    prop_2[i] = temp_result[1]
+    LQ_prop_2[i] = temp_result[3]
+    UQ_prop_2[i] = temp_result[4]
+    
+    
+  }
+  
+  if(lambda > 1){
+    y_lim_low_1 = 0.35
+    y_lim_high_1 = 0.85
+  } else if (symmetric){
+    y_lim_low_1 = 0.4
+    y_lim_high_1 = 0.6
+  } else{
+    y_lim_low_1 = 0.45
+    y_lim_high_1 = 0.625
+  }
+  
+  plot_data_1 = data.frame(Treatment = treat_vec, Proportion = prop_1, LQ = LQ_prop_1, UQ = UQ_prop_1)
+  
+  ggplot_ess_1 = ggplot(plot_data_1, aes(x=Treatment, y=Proportion)) +
+    geom_ribbon(aes(ymin=LQ, ymax=UQ, alpha = 0.5), fill = "grey70") +
+    geom_line(aes(y = Proportion)) +
+    labs( title = "Proportion against experimental efficacy - 0.1 control", x = "Experimental efficacy", y = "Proportion to experimental") +
+    coord_cartesian(ylim = c(y_lim_low_1,y_lim_high_1)) +
+    scale_y_continuous(breaks = seq(y_lim_low_1, y_lim_high_1, by = 0.05)) +
+    theme(legend.position="none")
+  
+  print(ggplot_ess_1)
+  
+  plot_data_2 = data.frame(Treatment = treat_vec, Proportion = prop_2, LQ = LQ_prop_2, UQ = UQ_prop_2)
+  
+  if(lambda > 1){
+    y_lim_low_2 = 0.15
+    y_lim_high_2 = 0.8
+  } else if (symmetric){
+    y_lim_low_2 = 0.4
+    y_lim_high_2 = 0.6
+  } else{
+    y_lim_low_2 = 0.45
+    y_lim_high_2 = 0.625
+  }
+  
+  ggplot_ess_2 = ggplot(plot_data_2, aes(x=Treatment, y=Proportion)) +
+    geom_ribbon(aes(ymin=LQ, ymax=UQ, alpha = 0.5), fill = "grey70") +
+    geom_line(aes(y = Proportion)) +
+    labs( title = "Proportion against experimental efficacy - 0.5 control", x = "Experimental efficacy", y = "Proportion to experimental") +
+    coord_cartesian(ylim = c(y_lim_low_2,y_lim_high_2)) +
+    scale_y_continuous(breaks = seq(y_lim_low_2, y_lim_high_2, by = 0.05)) +
+    theme(legend.position="none")
+  
+  print(ggplot_ess_2)
+  
+  ggarrange(ggplot_ess_1, ggplot_ess_2,
+            ncol = 1, nrow = 2)
+  
+  browser()
+  
+  
+}
+
+one_IA_ESS_plot = function(RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0.4, PairedSeed = FALSE, n_sim = 10000, optim = FALSE, lambda = 0.91, gamma = 0.94, max_power = TRUE, max_ESS_H0 = FALSE, max_ESS_H1 = FALSE){
   ## This function will just look at the effect of a singular IA placement on power and ESS
 
   ESS_plot = numeric(40)
@@ -785,18 +903,24 @@ one_IA_ESS_plot = function(RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0
     gamma = 0.97
   }
 
-  else{
-    lambda = 0.91
-    gamma = 0.94
-  }
   
   # This is what is returned
   # return(c(Power, ESS, ESS_low, ESS_high, Power_low, Power_high))
 
   for (i in seq(2,78,2)){
+    
+    print(i)
+    
+    if (optim){
+      temp_para = exact_optim_par(IAn = c(i,80), p_0 = control, p_1 = treat, max_power = max_power, max_ESS_H0 = max_ESS_H0, max_ESS_H1 = max_ESS_H1)
+      lambda = temp_para[1]
+      gamma = temp_para[2]
+    }
+    
+    temp_results_0 = OC_exact_calc_1IA(IAn = c(i,80), gamma = gamma, lambda =lambda, p_0 = control, p_1 =treat, n_total  = 80)
     temp_results = plots_IA_results(c(i,80), RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, control = control, treat = treat, PairedSeed = PairedSeed, n_sim = n_sim, return_95 = TRUE)
-    Power_plot[i/2] = temp_results[1]
-    ESS_plot[i/2] = temp_results[2]
+    Power_plot[i/2] = temp_results_0[2]
+    ESS_plot[i/2] = temp_results_0[1]
     low_ESS[i/2] = temp_results[3]
     high_ESS[i/2] = temp_results[4]
     low_power[i/2] = temp_results[5]
@@ -849,7 +973,7 @@ one_IA_ESS_plot = function(RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0
 
   
   ggplot_ess = ggplot(plot_df, aes(y = ESS_plot, x = IA_placement)) +
-    geom_ribbon(aes(ymin = low_ESS, ymax = high_ESS), fill = "grey70") +
+    #geom_ribbon(aes(ymin = low_ESS, ymax = high_ESS), fill = "grey70") +
     geom_line(aes(y = ESS_plot)) +
     labs( title = "ESS versus Interim placement - Illustrative example.", x = "IA placement", y = "ESS")
   
@@ -857,7 +981,7 @@ one_IA_ESS_plot = function(RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0
   print(ggplot_ess)
 
   ggplot_power = ggplot(plot_df, aes(y = Power_plot, x = IA_placement)) +
-    geom_ribbon(aes(ymin = Power_plot -  1.96*0.5/sqrt(n_sim), ymax = Power_plot + 1.96*0.5/sqrt(n_sim)), fill = "grey70") +
+    #geom_ribbon(aes(ymin = Power_plot -  1.96*0.5/sqrt(n_sim), ymax = Power_plot + 1.96*0.5/sqrt(n_sim)), fill = "grey70") +
     geom_line(aes(y = Power_plot)) +
     labs( title = "Power versus Interim placement - Illustrative example.", x = "IA placement", y = "Power")
   print(ggplot_power)
@@ -867,7 +991,7 @@ one_IA_ESS_plot = function(RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0
   
 }
 
-flex_grid_search = function(control = 0.2, treat = 0.4, n = 80, IAn = c(n), prior_a = 1, prior_b = 1, beta_cpp = FALSE, n_sim = 10000, RAR = TRUE){
+flex_grid_search = function(control = 0.2, treat = 0.4, n = 80, IAn = c(n), prior_a = 1, prior_b = 1, beta_cpp = TRUE, n_sim = 10000, RAR = TRUE){
   ## This function just updates our grid search code, will implement Parallilisation
   ## NOTE! PARALLISATION CURRENTLY DOESNT WORK WITH RCPP
   ## Update: RCPP should work with parallilisation now, will test to see if ti gives improvements
@@ -1005,12 +1129,12 @@ three_IA_min_ESS = function(lambda = 0.91, gamma = 0.98, RAR = TRUE, full_PBD = 
 
   for (i in seq(6,78,2)){
     # third IA
-    #print(i)
+    print(i)
     for (j in seq(4,i,2)){
       # second IA
       for (k in seq(2,j,2)){
         # third IA
-        temp_ess = plots_IA_results(c(k,j,i,80), RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, n_sim = 1000, control = control, treat = treat)[2]
+        temp_ess = plots_IA_results(c(k,j,i,80), RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, n_sim = 10000, control = control, treat = treat)[2]
         if (temp_ess < best_ess){
           best_ess = temp_ess
           opt_IA = c(k,j,i,80)
@@ -1019,8 +1143,8 @@ three_IA_min_ESS = function(lambda = 0.91, gamma = 0.98, RAR = TRUE, full_PBD = 
     }
   }
 
-  type_one_error = plots_IA_results(opt_IA, RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, n_sim = 1000, control = control, treat = control)[1]
-  return(c(opt_IA, best_ess, type_one_error))
+  power = plots_IA_results(opt_IA, RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, n_sim = 10000, control = control, treat = treat)[1]
+  return(c(opt_IA, best_ess, power))
 
 }
 
@@ -1039,7 +1163,7 @@ two_IA_min_ESS = function(lambda = 0.91, gamma = 0.98, RAR = TRUE, full_PBD = TR
     #print(i)
     for (j in seq(2,i,2)){
       # First IA
-        temp_ess = plots_IA_results(c(j,i,80), RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, n_sim = 1000, control = control, treat = treat)[2]
+        temp_ess = plots_IA_results(c(j,i,80), RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, n_sim = 10000, control = control, treat = treat)[2]
         if (temp_ess < best_ess){
           best_ess = temp_ess
           opt_IA = c(j,i,80)
@@ -1047,26 +1171,41 @@ two_IA_min_ESS = function(lambda = 0.91, gamma = 0.98, RAR = TRUE, full_PBD = TR
     }
   }
 
-  type_one_error = plots_IA_results(opt_IA, RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, n_sim = 1000, control = control, treat = control)[1]
-  return(c(opt_IA, best_ess, type_one_error))
+  power = plots_IA_results(opt_IA, RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, n_sim = 10000, control = control, treat = treat)[1]
+  return(c(opt_IA, best_ess, power))
 
 }
 
-one_IA_min_ESS = function(lambda = 0.91, gamma = 0.98, RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0.4, PairedSeed = FALSE){
+one_IA_min_ESS = function(lambda = 0.91, gamma = 0.98, RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0.4, PairedSeed = FALSE, optim = TRUE){
   
   min_ESS = 80
   best_IA = c(40,80)
+  power = 0
   
-  for (i in 1:40){
-    temp_ess = plots_IA_results(IAn = c(2*i,80), RAR = RAR, lambda = lambda, gamma = gamma, full_PBD = full_PBD, control = control, treat = treat)[2]
+  for (i in 1:39){
+    print(i)
+    if (optim){
+      temp_para = exact_optim_par(IAn = c(2*i,80), p_0 = 0.2, p_1 = 0.4, max_power = TRUE, max_ESS_H0 = FALSE, max_ESS_H1 = FALSE)
+      lambda = temp_para[1]
+      gamma = temp_para[2]
+    }
+    if (RAR){
+      temp_results = plots_IA_results(IAn = c(2*i,80), RAR = RAR, lambda = lambda, gamma = gamma, full_PBD = full_PBD, control = control, treat = treat)
+      
+    } else{
+      temp_results = OC_exact_calc_1IA(IAn = c(2*i,80), gamma = gamma, lambda =lambda, p_0 = control, p_1 =treat, n_total  = 80)
+    }
+    temp_ess = temp_results[1]
+    
     if (temp_ess < min_ESS){
       min_ESS = temp_ess
+      power = temp_results[2]
       best_IA = c(2*i,80)
     }
   }
   
-  type_one_error = plots_IA_results(IAn = best_IA, RAR = RAR, lambda = lambda, gamma = gamma, full_PBD = full_PBD, control = control, treat = control)[1] # make sure type one error is controlled
-  return(c(min_ESS, type_one_error))
+  #type_one_error = plots_IA_results(IAn = best_IA, RAR = RAR, lambda = lambda, gamma = gamma, full_PBD = full_PBD, control = control, treat = control)[1] # make sure type one error is controlled
+  return(c(min_ESS, power, best_IA))
 }
 
 one_IA_ESS_plot_range_null = function(RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0.4, PairedSeed = FALSE){
@@ -1401,7 +1540,7 @@ one_IA_ESS_plot_range_null_567 = function(RAR = TRUE, full_PBD = TRUE, control =
 
 }
 
-one_IA_ESS_plot_seven_null = function(RAR = TRUE, full_PBD = TRUE, alt = TRUE, PairedSeed = FALSE){
+one_IA_ESS_plot_seven_null = function(RAR = TRUE, full_PBD = TRUE, alt = TRUE, PairedSeed = FALSE, optim = FALSE){
   ## This function will just look at the effect of a singular IA placement on power and ESS
   # alt determines whether we are in the null or alt hypothesis
   
@@ -1454,10 +1593,19 @@ one_IA_ESS_plot_seven_null = function(RAR = TRUE, full_PBD = TRUE, alt = TRUE, P
   }
   
   for (j in 1:7){
+    print(j)
     for (i in seq(2,78,2)){
-      temp_results = plots_IA_results(c(i,80), RAR = RAR, full_PBD = full_PBD, gamma = gamma[j], lambda = lambda[j], control = controls[j], treat = treats[j], PairedSeed = PairedSeed)
-      Power_plot[[c(j,i/2)]] = temp_results[1]
-      ESS_plot[[c(j,i/2)]] = temp_results[2]
+      
+      if (optim){
+        temp_para = exact_optim_par(IAn = c(i,80), p_0 = controls[j], p_1 = treats[j], max_power = TRUE, max_ESS_H0 = FALSE, max_ESS_H1 = FALSE)
+        lambda = temp_para[1]
+        gamma = temp_para[2]
+      }
+      
+      temp_results = OC_exact_calc_1IA(IAn = c(i,80), gamma = gamma, lambda =lambda, p_0 = controls[j], p_1 =treats[j], n_total  = 80)
+      #temp_results = plots_IA_results(c(i,80), RAR = RAR, full_PBD = full_PBD, gamma = gamma[j], lambda = lambda[j], control = controls[j], treat = treats[j], PairedSeed = PairedSeed)
+      Power_plot[[c(j,i/2)]] = temp_results[2]
+      ESS_plot[[c(j,i/2)]] = temp_results[1]
       
     }
   }
@@ -1537,7 +1685,7 @@ one_IA_ESS_plot_seven_null = function(RAR = TRUE, full_PBD = TRUE, alt = TRUE, P
   
 }
 
-max_sample_size_plot = function(lambda = 0.91, gamma = 0.98, RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0.4, PairedSeed = FALSE, type_one = FALSE){
+max_sample_size_plot = function(lambda = 0.91, gamma = 0.98, RAR = TRUE, full_PBD = TRUE, control = 0.2, treat = 0.4, PairedSeed = FALSE, type_one = FALSE, optim = FALSE){
   ## This does a plot of how the ESS can change based on the maximum sample size, and what effect
   # the IA has as max sample size increases
   
@@ -1552,12 +1700,22 @@ max_sample_size_plot = function(lambda = 0.91, gamma = 0.98, RAR = TRUE, full_PB
   
 
   for (j in 1:7){
+    print(j)
     for (i in seq(2,20*j  + 18 ,2)){
-      temp_results = plots_IA_results(c(i,Max_sample_sizes[j]), RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, control = control, treat = treat, n = Max_sample_sizes[j], PairedSeed = PairedSeed)
+      print(i)
       
-      ESS_plot[[c(j,i/2)]] = temp_results[2]/Max_sample_sizes[j]
+      if (optim){
+        temp_para = exact_optim_par(IAn = c(i,Max_sample_sizes[j]), p_0 = control, p_1 = treat, max_power = TRUE, max_ESS_H0 = FALSE, max_ESS_H1 = FALSE, n_total = Max_sample_sizes[j])
+        lambda = temp_para[1]
+        gamma = temp_para[2]
+      }
+      
+      temp_results = OC_exact_calc_1IA(IAn = c(i,Max_sample_sizes[j]), gamma = gamma, lambda =lambda, p_0 = control, p_1 =treat, n_total  = Max_sample_sizes[j])
+      #temp_results = plots_IA_results(c(i,Max_sample_sizes[j]), RAR = RAR, full_PBD = full_PBD, gamma = gamma, lambda = lambda, control = control, treat = treat, n = Max_sample_sizes[j], PairedSeed = PairedSeed)
+      
+      ESS_plot[[c(j,i/2)]] = temp_results[1]/Max_sample_sizes[j]
       # We're dividing by Max_sample_size here as we just want to see percentage done
-      Power_plot[[c(j,i/2)]] = temp_results[1]
+      Power_plot[[c(j,i/2)]] = temp_results[2]
       
     }
   }
@@ -1705,17 +1863,200 @@ one_IA_min_prop = function(lambda = 0.91, gamma = 0.98, RAR = TRUE, full_PBD = T
   return(c(best_prop, best_IA))
 }
 
+both_prob_end_bop2_1IA = function(p_0, p_1, lambda, gamma, n_total = 80, IAn){
+  # Calculates the probability of ending the trial early for supe or futility
+  ## specifically, returns both probabilities in a vector
+  # assuming er, n_pa is patients per arm
+  # p_0 null prob
+  # p_1 is alt prob
+  # lambda and gamma optimisation parameters 
+  # ONLY WORKS IF IAn[final] =  n_total!
+  # Works for up to 4 IA 
+  
+  fute_early_prob = numeric(length(IAn))
+  supe_early_prob = numeric(length(IAn))
+  
+  n_1_pa = IAn[1]/2
+  
+  thresh_prob = Threshold_prob(lambda, gamma, n_total, n_1_pa*2 )
+  
+  prob_supe = thresh_prob[2]
+  
+  prob_fute = thresh_prob[1]
+  
+  for (i in 0:n_1_pa){
+    for (j in 0:n_1_pa){
+      #print(i)
+      #1st IA
+      
+      thresh_prob = Threshold_prob(lambda, gamma, n_total, n_1_pa*2 )
+      
+      prob_supe = thresh_prob[2]
+      
+      prob_fute = thresh_prob[1]
+      
+      prob = 1 - rcpp_exact_beta(i + 1,n_1_pa - i + 1,j + 1,n_1_pa - j + 1)
+      
+      if (prob < prob_fute){ # Futility
+        fute_early_prob[1] = fute_early_prob[1] + (pbinom(i,n_1_pa,p_1 ) - pbinom(i - 1,n_1_pa,p_1 ))*(pbinom(j,n_1_pa,p_0 ) - pbinom(j - 1,n_1_pa,p_0 ))
+      }
+      else if (prob > prob_supe){ # Supe
+        supe_early_prob[1] = supe_early_prob[1] + (pbinom(i,n_1_pa,p_1 ) - pbinom(i - 1,n_1_pa,p_1 ))*(pbinom(j,n_1_pa,p_0 ) - pbinom(j - 1,n_1_pa,p_0 ))
+      }
+      else{ # Continue 
+        n_2_pa = (IAn[2] - IAn[1])/2
+        
+        
+        
+        for (a in 0:n_2_pa){
+          for (b in 0:n_2_pa){
+            # 2nd IA
+            #print(a)
+            
+            thresh_prob = Threshold_prob(lambda, gamma, n_total, IAn[2] )
+            
+            prob_supe = thresh_prob[2]
+            
+            prob_fute = thresh_prob[1]
+            
+            prob = 1 - rcpp_exact_beta(i + a + 1,IAn[2]/2 - i - a+ 1,j + b + 1,IAn[2]/2 - j - b + 1)
+            
+            if (prob < prob_fute){
+              fute_early_prob[2] = fute_early_prob[2] + (pbinom(i,n_1_pa,p_1 ) - pbinom(i - 1,n_1_pa,p_1 ))*(pbinom(j,n_1_pa,p_0 ) - pbinom(j - 1,n_1_pa,p_0 ))*(pbinom(a,n_2_pa,p_1 ) - pbinom(a - 1,n_2_pa,p_1 ))*(pbinom(b,n_2_pa,p_0 ) - pbinom(b - 1,n_2_pa,p_0 ))
+            }
+            else if (prob > prob_supe){
+              supe_early_prob[2] = supe_early_prob[2] + (pbinom(i,n_1_pa,p_1 ) - pbinom(i - 1,n_1_pa,p_1 ))*(pbinom(j,n_1_pa,p_0 ) - pbinom(j - 1,n_1_pa,p_0 ))*(pbinom(a,n_2_pa,p_1 ) - pbinom(a - 1,n_2_pa,p_1 ))*(pbinom(b,n_2_pa,p_0 ) - pbinom(b - 1,n_2_pa,p_0 ))
+            }
+            
+            
+          }
+        }
+        
+      }
+      
+      #browser()
+    }
+  }
+  
+  return(c("Futility" = fute_early_prob, "Supe" = supe_early_prob))
+  
+  
+}
+
+
+OC_exact_calc_1IA = function(IAn = c(60,80), n_total = 80, p_0 = 0.2, p_1 = 0.4, lambda = 0.91, gamma = 0.93){
+  
+  prob = both_prob_end_bop2_1IA(p_0 = p_0, p_1 = p_1, lambda = lambda, gamma = gamma, n_total = n_total, IAn = IAn)
+  
+  NR = prob[3] + prob[4]
+  ESS = (prob[1] + prob[3])*IAn[1] + (prob[2] + prob[4])*IAn[2]
+  
+  return(c("ESS" = ESS, "NR" = NR))
+  
+}
+
+
+exact_optim_par = function(IAn = c(60,80), n_total = 80, p_0 = 0.2, p_1 = 0.4, max_power = TRUE, max_ESS_H0 = FALSE, max_ESS_H1 = FALSE){
+  lambda_vec = seq(0.85,0.925, 0.005)
+  gamma_vec = seq(0.05,1, 0.05)
+  
+  lambda_df_vec = rep(lambda_vec, length(gamma_vec))
+  gamma_df_vec = rep(gamma_vec, length(lambda_vec))
+  
+  n_sim = length(lambda_df_vec)
+  
+  optim_df = data.frame("Lambda" = lambda_df_vec, "Gamma" = gamma_df_vec, "Power" = numeric(n_sim), "ESS_H1" = numeric(n_sim), "Alpha" = numeric(n_sim), "ESS_H0" = numeric(n_sim))
+  
+  par_results = vector("list",n_sim)
+  
+  ## Parallelisation
+  cores = detectCores()
+  
+  cl = makeCluster(cores/2)  ## To not get overloaded
+  
+  registerDoParallel(cl)  # Activates 
+  
+  par_results = foreach( i = 1:n_sim, .export = c("rcpp_exact_beta","Threshold_prob","OC_exact_calc_1IA","both_prob_end_bop2_1IA"))  %dopar% {
+    
+    #for(i in 1:n_sim){
+    
+    temp_H0 = OC_exact_calc_1IA(IAn = IAn, n_total = n_total, p_0 = p_0, p_1 = p_0, lambda = lambda_df_vec[i], gamma = gamma_df_vec[i])
+    temp_H1 = OC_exact_calc_1IA(IAn = IAn, n_total = n_total, p_0 = p_0, p_1 = p_1, lambda = lambda_df_vec[i], gamma = gamma_df_vec[i])
+    
+    #optim_df$Power[i] = temp_H1[2]
+    #optim_df$ESS_H1[i] = temp_H1[1]
+    
+    #optim_df$Alpha[i] = temp_H0[2]
+    #optim_df$ESS_H0[i] = temp_H0[1]
+    
+    return(c(temp_H1,temp_H0))
+    
+  }
+  
+  stopCluster(cl) # deactivates
+  
+  for (i in 1:n_sim){
+    optim_df$Power[i] = par_results[[i]][2]
+    optim_df$ESS_H1[i] = par_results[[i]][1]
+    
+    optim_df$Alpha[i] = par_results[[i]][4]
+    optim_df$ESS_H0[i] = par_results[[i]][3]
+    
+  }
+  
+  if (max_power){
+    #browser()
+    
+    # We want to optimise power
+    index = which.max(optim_df$Power[which(optim_df$Alpha < 0.1)])
+    lambda = optim_df$Lambda[which(optim_df$Alpha < 0.1)][index]
+    gamma = optim_df$Gamma[which(optim_df$Alpha < 0.1)][index]
+    
+    #print(optim_df[which(optim_df$Alpha < 0.1),][index,])
+    
+  }
+  
+  if (max_ESS_H0){
+    #browser()
+    
+    # We want to optimise power
+    index = which.min(optim_df$ESS_H0[which(abs(optim_df$Alpha - 0.095) < 0.005)]) # abs here to ensure powe type one error is close to target and thus power reasonable
+    lambda = optim_df$Lambda[which(abs(optim_df$Alpha - 0.095) < 0.005)][index]
+    gamma = optim_df$Gamma[which(abs(optim_df$Alpha - 0.095) < 0.005)][index]
+    
+    #print(optim_df[which(abs(optim_df$Alpha - 0.095) < 0.005),][index,])
+    
+  }
+  
+  if (max_ESS_H1){
+    #browser()
+    
+    # We want to optimise power
+    index = which.min(optim_df$ESS_H1[which(abs(optim_df$Alpha - 0.095) < 0.005)]) # abs here to ensure powe type one error is close to target and thus power reasonable
+    lambda = optim_df$Lambda[which(abs(optim_df$Alpha - 0.095) < 0.005)][index]
+    gamma = optim_df$Gamma[which(abs(optim_df$Alpha - 0.095) < 0.005)][index]
+    
+    #print(optim_df[which(abs(optim_df$Alpha - 0.095) < 0.005),][index,])
+    
+  }
+  
+  return(c("Lambda" = lambda, "Gamma" = gamma))
+  
+  
+}
+
 
 ### REPRODUCIBLE FIGURES
 
-## Figure 2+3
+## Figure 1
 
 #Prints both figure 2+3
 
+# Exact calc and optimises at every point
 Figure_2 = FALSE
 if (Figure_2){
   set.seed(2025)
-  one_IA_ESS_plot(RAR = FALSE, PairedSeed = 2025)
+  one_IA_ESS_plot(RAR = FALSE, PairedSeed = 2025, optim = TRUE, max_power = TRUE, max_ESS_H0 = FALSE, max_ESS_H1 = FALSE )
 }
 
 Appendix_for_Figure_2 = FALSE
@@ -1726,19 +2067,42 @@ if (Appendix_for_Figure_2){
 }
 
 ## Figure 4+5
-
+# Exact calc and optimises at every point 
 Figure_4 = FALSE
 if (Figure_4){
   set.seed(2025)
-  one_IA_ESS_plot_seven_null(RAR = FALSE, PairedSeed = 2025)
+  one_IA_ESS_plot_seven_null(RAR = FALSE, PairedSeed = 2025, optim = TRUE)
 }
 
-Figure_6 = FALSE
+
+# Optimised for each design and exact calculations
+  Figure_6 = FALSE
 if (Figure_6){
   set.seed(2025)
   max_sample_size_plot(RAR = FALSE, PairedSeed = 2025)
 
   
+}
+  
+# Prop plot with error bars  
+new_Figure_6 = FALSE
+if (new_Figure_6){
+  set.seed(2025)
+  prop_plot_across_null(PairedSeed = 2025)
+}
+
+appendix_plot_no_stop = FALSE
+if (appendix_plot_no_stop){
+  
+  set.seed(2025)
+  prop_plot_across_null(PairedSeed = 2025, lambda = 2)
+}
+
+appendix_plot_symmetric = FALSE
+if (appendix_plot_symmetric){
+  
+  set.seed(2025)
+  prop_plot_across_null(PairedSeed = 2025, symmetric = TRUE)
 }
 
 
@@ -1777,6 +2141,113 @@ if (Table_1){
   print(three_IA_min_ESS(RAR = FALSE))
   print(plots_IA_results(RAR = FALSE, IAn = c(20,40,60,80)))
   print(plots_IA_results(RAR = FALSE, IAn = c(38,52,66,80)))
+  
+ 
+  
+  ## Three IA
+  # FRAIL-M spacing
+  
+  #temp_para = optim_case_par(IAn = c(10,20,35,50))
+  #print("Equal - 3 IA")
+  #print(exact_OC_case(IAn = c(10,20,35,50), par = TRUE, lambda = temp_para[1], gamma = temp_para[2]))
+  
+  
+  # Waiting period (wait 15)
+  
+  #temp_para = optim_case_par(IAn = c(15,26,38,50))
+  #print("Equal - 3 IA")
+  #print(exact_OC_case(IAn = c(15,26,38,50), par = TRUE, lambda = temp_para[1], gamma = temp_para[2]))
+  
+  # Minimise ESS 
+  
+  #registerDoRNG(2025)
+  
+  #print("Minimal ESS - 3 IA")
+  #optim_vec = IA_optimiser_case_par(n_sim = 10000, lambda = temp_para[1], gamma = temp_para[2]))
+  #print("Minimal - 3 IA")
+  #print(optim_vec)
+  #print(exact_OC_case(IAn = c(optim_vec[1],optim_vec[2],optim_vec[3],50), par = TRUE, lambda = temp_para[1], gamma = temp_para[2]))
+  
+}
+
+new_Table_1 = TRUE
+if (new_Table_1){
+  set.seed(2025)
+  registerDoRNG(2025)
+  ## 1 IA 
+  # Equal
+  
+  temp_para = exact_optim_par(IAn = c(40,80), p_0 = 0.2, p_1 = 0.4, max_power = TRUE, max_ESS_H0 = FALSE, max_ESS_H1 = FALSE)
+  lambda = temp_para[1]
+  gamma = temp_para[2]
+  temp_results = OC_exact_calc_1IA(IAn = c(40,80), gamma = gamma, lambda =lambda, p_0 = 0.2, p_1 =0.4, n_total  = 80)
+  print("1IA - Equal")
+  print(temp_results)
+  
+  # Waiting
+  temp_para = exact_optim_par(IAn = c(52,80), p_0 = 0.2, p_1 = 0.4, max_power = TRUE, max_ESS_H0 = FALSE, max_ESS_H1 = FALSE)
+  lambda = temp_para[1]
+  gamma = temp_para[2]
+  temp_results = OC_exact_calc_1IA(IAn = c(52,80), gamma = gamma, lambda =lambda, p_0 = 0.2, p_1 = 0.4, n_total  = 80)
+  print("1IA - Wait")
+  print(temp_results)
+  
+  # Minimal ESS
+  #registerDoRNG(2025)
+  temp_results = one_IA_min_ESS(optim = TRUE, RAR = FALSE)
+  print("1IA - Min ESS")
+  print(temp_results)
+  
+  ## 2 IA
+  
+  # Equal
+  temp_para = flex_grid_search(IAn = c(26,54,80), RAR = FALSE) 
+  lambda = temp_para[1]
+  gamma = temp_para[2]
+  print("2IA - Equal")
+  print(temp_results)
+  print(plots_IA_results(RAR = FALSE, IAn = c(26,54,80)), lambda = lambda, gamma = gamma)
+  
+  # Wait
+  temp_para = flex_grid_search(IAn = c(42,62,80), RAR = FALSE) 
+  lambda = temp_para[1]
+  gamma = temp_para[2]
+  print("2IA - Wait")
+  print(temp_results)
+  print(plots_IA_results(RAR = FALSE, IAn = c(42,62,80)), lambda = lambda, gamma = gamma)
+  
+  
+  # Minimal ESS
+  print("2 IA - Min")
+  print(two_IA_min_ESS(RAR = FALSE))
+  
+  
+  
+  
+  ## 3 IA
+  
+  # Equal
+  temp_para = flex_grid_search(IAn = c(20,40,60,80), RAR = FALSE) 
+  lambda = temp_para[1]
+  gamma = temp_para[2]
+  print("3IA - Equal")
+  print(temp_results)
+  print(plots_IA_results(RAR = FALSE, IAn = c(20,40,60,80)), lambda = lambda, gamma = gamma)
+  
+  # Wait
+  temp_para = flex_grid_search(IAn = c(38,52,66,80), RAR = FALSE) 
+  lambda = temp_para[1]
+  gamma = temp_para[2]
+  print("3IA - Wait")
+  print(temp_results)
+  print(plots_IA_results(RAR = FALSE, IAn = c(38,52,66,80)), lambda = lambda, gamma = gamma)
+  
+  
+  # Minimal ESS
+  print("3IA - Min")
+  print(three_IA_min_ESS(RAR = FALSE))
+
+  
   
 }
 
@@ -1825,11 +2296,13 @@ if (Figure_8){
 
 ## Figuire 14
 
-Figure_14 = TRUE
+Figure_14 = FALSE
 if(Figure_14){
   set.seed(2025)
+  # Parallel so needs this seed setting indeed
+  registerDoRNG(2025)
   
-  prop_plot(PairedSeed = 2025)
+  prop_plot(PairedSeed = 2025, optim = TRUE)
   
 }
 # Maybe add error bars to proportion plot? Or wait for review
