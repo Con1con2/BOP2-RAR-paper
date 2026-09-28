@@ -12,3 +12,5 @@ Table 3 is generated from BOP2 reproducible
 Figure 5 and Table 2 are generated from BOP2 exact testing
 
 Table 7 in the appendix is generated using bop2_ayon
+
+Note that bop2_ayon was written by Ayon Mukerherjee, and uses a different method to generate results than the other code. However, it has been verified against the other code. All other code has been written by Connor Fitchett.
