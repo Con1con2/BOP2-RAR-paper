@@ -10,3 +10,5 @@ Figure 4 and Table 5 are generated from Investigating IA freq multi-arm
 Table 3 is generated from BOP2 reproducible
 
 Figure 5 and Table 2 are generated from BOP2 exact testing
+
+Table 7 in the appendix is generated using bop2_ayon
